@@ -1,5 +1,5 @@
 ---
-- name: Configurar Servidor Local (Update, Docker e Git) - Compatível com Debian 13
+- name: Configurar Servidor Local (Update, Docker, Git e HAProxy Pull) - Compatível com Debian 13
   hosts: localhost
   become: yes
   connection: local
@@ -82,3 +82,20 @@
       debug:
         msg: "Docker instalado com sucesso: {{ docker_version.stdout }}"
       tags: [docker]
+
+    - name: 5.1 - Baixar imagem oficial do HAProxy no Docker Hub
+      community.docker.docker_image:
+        name: haproxy
+        source: pull
+      tags: [haproxy]
+
+    - name: 5.2 - Exibir confirmação da imagem baixada
+      command: docker images haproxy
+      register: haproxy_image
+      changed_when: false
+      tags: [haproxy]
+
+    - name: 5.3 - Mostrar imagem do HAProxy baixada
+      debug:
+        msg: "Imagem HAProxy disponível: {{ haproxy_image.stdout }}"
+      tags: [haproxy]
