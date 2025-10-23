@@ -1,8 +1,13 @@
 ---
-- name: Configurar Servidor Local (Update, Docker, Git e HAProxy Pull) - Compatível com Debian 13
-  hosts: localhost
+- name: Configurar Servidor Cliente (Update, Docker, Git e Registro no HAProxy) - Debian 13
+  hosts: cliente
   become: yes
-  connection: local
+  remote_user: adminsenai@134
+
+  vars:
+    haproxy_api_url: "http://haproxy.upgrid.local:5555/v2/services/haproxy/configuration/servers"
+    haproxy_api_user: "admin"
+    haproxy_api_pass: "senai@134"
 
   tasks:
 
@@ -21,7 +26,6 @@
         name: git
         state: present
       tags: [git]
-
     - name: 3.1 - Instalar pacotes de pré-requisito para o Docker
       apt:
         name:
@@ -33,7 +37,7 @@
         state: present
       tags: [docker]
 
-    - name: 3.2 - Baixar e salvar a chave GPG oficial do Docker (novo método)
+    - name: 3.2 - Baixar e salvar a chave GPG oficial do Docker
       ansible.builtin.get_url:
         url: https://download.docker.com/linux/debian/gpg
         dest: /usr/share/keyrings/docker-archive-keyring.gpg
@@ -65,37 +69,42 @@
         enabled: yes
       tags: [docker]
 
-    - name: 3.6 - Adicionar o usuário atual ao grupo docker
+    - name: 3.6 - Adicionar o usuário remoto ao grupo docker
       user:
-        name: "{{ lookup('env', 'USER') }}"
+        name: "{{ remote_user | default(ansible_user_id) }}"
         groups: docker
         append: yes
       tags: [docker]
 
-    - name: 4.1 - Testar instalação do Docker
-      command: docker --version
-      register: docker_version
+    - name: 4.1 - Obter IP local do cliente
+      command: hostname -I
+      register: client_ip_raw
       changed_when: false
-      tags: [docker]
 
-    - name: 4.2 - Exibir versão do Docker instalada
+    - set_fact:
+        client_ip: "{{ client_ip_raw.stdout.split()[0] }}"
+
+    - name: 4.2 - Registrar cliente no HAProxy via API
+      uri:
+        url: "{{ haproxy_api_url }}"
+        method: POST
+        user: "{{ haproxy_api_user }}"
+        password: "{{ haproxy_api_pass }}"
+        force_basic_auth: yes
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "client-{{ ansible_hostname }}"
+          address: "{{ client_ip }}"
+          port: 80
+          check: true
+          backend: "{{ haproxy_backend_name }}"
+      register: haproxy_response
+      ignore_errors: yes
+      tags: [haproxy-register]
+
+    - name: 4.3 - Mostrar resultado do registro no HAProxy
       debug:
-        msg: "Docker instalado com sucesso: {{ docker_version.stdout }}"
-      tags: [docker]
-
-    - name: 5.1 - Baixar imagem oficial do HAProxy no Docker Hub
-      community.docker.docker_image:
-        name: haproxy
-        source: pull
-      tags: [haproxy]
-
-    - name: 5.2 - Exibir confirmação da imagem baixada
-      command: docker images haproxy
-      register: haproxy_image
-      changed_when: false
-      tags: [haproxy]
-
-    - name: 5.3 - Mostrar imagem do HAProxy baixada
-      debug:
-        msg: "Imagem HAProxy disponível: {{ haproxy_image.stdout }}"
-      tags: [haproxy]
+        msg: "Cliente {{ ansible_hostname }} registrado no HAProxy com IP {{ client_ip }}. Resposta: {{ haproxy_response.status }}"
+      tags: [haproxy-register]
