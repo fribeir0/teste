@@ -1,13 +1,11 @@
 ---
-- name: Configurar Servidor Cliente (Update, Docker, Git e Registro no HAProxy) - Debian 13
+- name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
   hosts: cliente
   become: yes
   remote_user: adminsenai@134
 
   vars:
-    haproxy_api_url: "http://haproxy.upgrid.local:5555/v2/services/haproxy/configuration/servers"
-    haproxy_api_user: "admin"
-    haproxy_api_pass: "senai@134"
+    register_api_url: "http://haproxy.upgrid.local:5000/register"
 
   tasks:
 
@@ -26,6 +24,7 @@
         name: git
         state: present
       tags: [git]
+
     - name: 3.1 - Instalar pacotes de pré-requisito para o Docker
       apt:
         name:
@@ -38,14 +37,14 @@
       tags: [docker]
 
     - name: 3.2 - Baixar e salvar a chave GPG oficial do Docker
-      ansible.builtin.get_url:
+      get_url:
         url: https://download.docker.com/linux/debian/gpg
         dest: /usr/share/keyrings/docker-archive-keyring.gpg
         mode: '0644'
       tags: [docker]
 
     - name: 3.3 - Adicionar o repositório do Docker ao sistema
-      ansible.builtin.apt_repository:
+      apt_repository:
         repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
         state: present
         filename: docker
@@ -84,27 +83,23 @@
     - set_fact:
         client_ip: "{{ client_ip_raw.stdout.split()[0] }}"
 
-    - name: 4.2 - Registrar cliente no HAProxy via API
+    - name: 4.2 - Registrar cliente na API de register
       uri:
-        url: "{{ haproxy_api_url }}"
+        url: "{{ register_api_url }}"
         method: POST
-        user: "{{ haproxy_api_user }}"
-        password: "{{ haproxy_api_pass }}"
-        force_basic_auth: yes
         headers:
           Content-Type: "application/json"
         body_format: json
         body:
-          name: "client-{{ ansible_hostname }}"
-          address: "{{ client_ip }}"
+          name: "{{ ansible_hostname }}"
+          ip: "{{ client_ip }}"
           port: 80
-          check: true
-          backend: "{{ haproxy_backend_name }}"
-      register: haproxy_response
+          backend: "bk_web_apps"
+      register: register_response
       ignore_errors: yes
-      tags: [haproxy-register]
+      tags: [register-api]
 
-    - name: 4.3 - Mostrar resultado do registro no HAProxy
+    - name: 4.3 - Mostrar resultado do registro na API
       debug:
-        msg: "Cliente {{ ansible_hostname }} registrado no HAProxy com IP {{ client_ip }}. Resposta: {{ haproxy_response.status }}"
-      tags: [haproxy-register]
+        msg: "Cliente {{ ansible_hostname }} registrado na API com IP {{ client_ip }}. Resposta HTTP: {{ register_response.status }}"
+      tags: [register-api]
