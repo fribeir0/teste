@@ -1,8 +1,8 @@
 ---
 - name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
-  hosts: cliente
+  hosts: localhost
   become: yes
-  remote_user: adminsenai@134
+  connection: local  # executa tudo localmente
 
   vars:
     register_api_url: "http://haproxy.upgrid.local:5000/register"
@@ -36,11 +36,11 @@
         state: present
       tags: [docker]
 
-    - name: 3.2 - Baixar e salvar a chave GPG oficial do Docker
-      get_url:
-        url: https://download.docker.com/linux/debian/gpg
-        dest: /usr/share/keyrings/docker-archive-keyring.gpg
-        mode: '0644'
+    - name: 3.2 - Adicionar chave GPG oficial do Docker (convertida)
+      shell: |
+        curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/docker-archive-keyring.gpg
       tags: [docker]
 
     - name: 3.3 - Adicionar o repositório do Docker ao sistema
@@ -68,9 +68,9 @@
         enabled: yes
       tags: [docker]
 
-    - name: 3.6 - Adicionar o usuário remoto ao grupo docker
+    - name: 3.6 - Adicionar o usuário atual ao grupo docker
       user:
-        name: "{{ remote_user | default(ansible_user_id) }}"
+        name: "{{ ansible_user_id }}"
         groups: docker
         append: yes
       tags: [docker]
@@ -80,10 +80,11 @@
       register: client_ip_raw
       changed_when: false
 
-    - set_fact:
+    - name: 4.2 - Definir IP processado
+      set_fact:
         client_ip: "{{ client_ip_raw.stdout.split()[0] }}"
 
-    - name: 4.2 - Registrar cliente na API de register
+    - name: 4.3 - Registrar cliente na API de register
       uri:
         url: "{{ register_api_url }}"
         method: POST
@@ -99,7 +100,9 @@
       ignore_errors: yes
       tags: [register-api]
 
-    - name: 4.3 - Mostrar resultado do registro na API
+    - name: 4.4 - Mostrar resultado do registro na API
       debug:
-        msg: "Cliente {{ ansible_hostname }} registrado na API com IP {{ client_ip }}. Resposta HTTP: {{ register_response.status }}"
+        msg: >-
+          Cliente {{ ansible_hostname }} registrado na API com IP {{ client_ip }}.
+          Resposta HTTP: {{ register_response.status | default('Falha na conexão com a API') }}
       tags: [register-api]
