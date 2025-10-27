@@ -1,7 +1,6 @@
 ---
 - name: Configurar Cliente Local (Docker + Registro na API)
   hosts: localhost
-  become: yes
   gather_facts: yes
 
   vars:
