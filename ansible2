@@ -12,150 +12,150 @@
 
   tasks:
 
-  ########################################################
-  # 1. Atualizações e instalação básica                 #
-  ########################################################
-  - name: Atualizar cache de pacotes
-    apt:
-      update_cache: yes
+    ########################################################
+    # 1. Atualizações e instalação básica                 #
+    ########################################################
+    - name: Atualizar cache de pacotes
+      apt:
+        update_cache: yes
 
-  - name: Atualizar todos os pacotes do sistema
-    apt:
-      upgrade: dist
+    - name: Atualizar todos os pacotes do sistema
+      apt:
+        upgrade: dist
 
-  - name: Instalar Git
-    apt:
-      name: git
-      state: present
+    - name: Instalar Git
+      apt:
+        name: git
+        state: present
 
-  ########################################################
-  # 2. Instalação do Docker                              #
-  ########################################################
-  - name: Instalar pacotes de pré-requisito para Docker
-    apt:
-      name:
-        - apt-transport-https
-        - ca-certificates
-        - curl
-        - gnupg
-        - lsb-release
-      state: present
+    ########################################################
+    # 2. Instalação do Docker                              #
+    ########################################################
+    - name: Instalar pacotes de pré-requisito para Docker
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
 
-  - name: Baixar e salvar a chave GPG oficial do Docker
-    get_url:
-      url: https://download.docker.com/linux/debian/gpg
-      dest: /usr/share/keyrings/docker-archive-keyring.gpg
-      mode: '0644'
+    - name: Baixar e salvar a chave GPG oficial do Docker
+      get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /usr/share/keyrings/docker-archive-keyring.gpg
+        mode: '0644'
 
-  - name: Adicionar repositório Docker
-    apt_repository:
-      repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
-      state: present
-      filename: docker
+    - name: Adicionar repositório Docker
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
 
-  - name: Instalar Docker Engine, CLI e Compose
-    apt:
-      name:
-        - docker-ce
-        - docker-ce-cli
-        - containerd.io
-        - docker-compose-plugin
-      state: present
-      update_cache: yes
+    - name: Instalar Docker Engine, CLI e Compose
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
 
-  - name: Garantir que o Docker esteja iniciado e habilitado
-    service:
-      name: docker
-      state: started
-      enabled: yes
+    - name: Garantir que o Docker esteja iniciado e habilitado
+      service:
+        name: docker
+        state: started
+        enabled: yes
 
-  ########################################################
-  # 3. Obter IP local do cliente                          #
-  ########################################################
-  - name: Obter IP local do cliente
-    command: hostname -I
-    register: client_ip_raw
-    changed_when: false
+    ########################################################
+    # 3. Obter IP local do cliente                          #
+    ########################################################
+    - name: Obter IP local do cliente
+      command: hostname -I
+      register: client_ip_raw
+      changed_when: false
 
-  - set_fact:
-      client_ip: "{{ client_ip_raw.stdout.split()[0] | default('127.0.0.1') }}"
+    - set_fact:
+        client_ip: "{{ client_ip_raw.stdout.split()[0] | default('127.0.0.1') }}"
 
-  ########################################################
-  # 4. Checagens de DNS e TCP                             #
-  ########################################################
-  - name: Checar resolução DNS para {{ register_api_host }}
-    command: getent hosts {{ register_api_host }}
-    register: getent_out
-    changed_when: false
-    failed_when: false
+    ########################################################
+    # 4. Checagens de DNS e TCP                             #
+    ########################################################
+    - name: Checar resolução DNS para {{ register_api_host }}
+      command: getent hosts {{ register_api_host }}
+      register: getent_out
+      changed_when: false
+      failed_when: false
 
-  - name: Mostrar resultado da resolução DNS
-    debug:
-      msg:
-        - "getent stdout: {{ getent_out.stdout | default('') }}"
-        - "getent rc: {{ getent_out.rc }}"
+    - name: Mostrar resultado da resolução DNS
+      debug:
+        msg:
+          - "getent stdout: {{ getent_out.stdout | default('') }}"
+          - "getent rc: {{ getent_out.rc }}"
 
-  - name: Verificar conectividade TCP na porta {{ register_api_port }}
-    wait_for:
-      host: "{{ register_api_host }}"
-      port: "{{ register_api_port }}"
-      timeout: 6
-      state: started
-    register: wait_for_result
-    failed_when: false
+    - name: Verificar conectividade TCP na porta {{ register_api_port }}
+      wait_for:
+        host: "{{ register_api_host }}"
+        port: "{{ register_api_port }}"
+        timeout: 6
+        state: started
+      register: wait_for_result
+      failed_when: false
 
-  - name: Mostrar resultado do wait_for
-    debug:
-      msg: "wait_for result: {{ wait_for_result }}"
+    - name: Mostrar resultado do wait_for
+      debug:
+        msg: "wait_for result: {{ wait_for_result }}"
 
-  ########################################################
-  # 5. Registrar cliente na API                           #
-  ########################################################
-  - name: Registrar cliente na API (tentativas até sucesso)
-    vars:
-      payload:
-        name: "{{ ansible_hostname }}"
-        ip: "{{ client_ip }}"
-        port: 80
-        backend: "bk_web_apps"
-    uri:
-      url: "{{ register_api_url }}"
-      method: POST
-      headers:
-        Content-Type: "application/json"
-      body_format: json
-      body: "{{ payload }}"
-      timeout: 10
-      return_content: yes
-      status_code: 200,201,202,204
-      use_proxy: no
-    register: register_response
-    until: register_response.status is defined and register_response.status in [200,201,202,204]
-    retries: 4
-    delay: 5
-    ignore_errors: yes
+    ########################################################
+    # 5. Registrar cliente na API                           #
+    ########################################################
+    - name: Registrar cliente na API (tentativas até sucesso)
+      vars:
+        payload:
+          name: "{{ ansible_hostname }}"
+          ip: "{{ client_ip }}"
+          port: 80
+          backend: "bk_web_apps"
+      uri:
+        url: "{{ register_api_url }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body: "{{ payload }}"
+        timeout: 10
+        return_content: yes
+        status_code: 200,201,202,204
+        use_proxy: no
+      register: register_response
+      until: register_response.status is defined and register_response.status in [200,201,202,204]
+      retries: 4
+      delay: 5
+      ignore_errors: yes
 
-  - name: Mostrar resultado do registro na API
-    debug:
-      msg:
-        - "URL: {{ register_api_url }}"
-        - "Payload: {{ payload }}"
-        - "HTTP status: {{ register_response.status | default('no-status') }}"
-        - "Content: {{ register_response.content | default('no-content') }}"
-        - "Failed: {{ register_response.failed | default(False) }}"
-        - "Msg (quando presente): {{ register_response.msg | default('') }}"
+    - name: Mostrar resultado do registro na API
+      debug:
+        msg:
+          - "URL: {{ register_api_url }}"
+          - "Payload: {{ payload }}"
+          - "HTTP status: {{ register_response.status | default('no-status') }}"
+          - "Content: {{ register_response.content | default('no-content') }}"
+          - "Failed: {{ register_response.failed | default(False) }}"
+          - "Msg (quando presente): {{ register_response.msg | default('') }}"
 
-  - name: Falhar explicitamente se o registro NÃO ocorreu
-    fail:
-      msg: |
-        Registro falhou.
-        URL={{ register_api_url }}
-        HTTP status={{ register_response.status | default('no-status') }}
-        Content={{ register_response.content | default('no-content') }}
-        Msg={{ register_response.msg | default('') }}
-    when: register_response is defined and (register_response.status is not defined or register_response.status not in [200,201,202,204])
+    - name: Falhar explicitamente se o registro NÃO ocorreu
+      fail:
+        msg: |
+          Registro falhou.
+          URL={{ register_api_url }}
+          HTTP status={{ register_response.status | default('no-status') }}
+          Content={{ register_response.content | default('no-content') }}
+          Msg={{ register_response.msg | default('') }}
+      when: register_response is defined and (register_response.status is not defined or register_response.status not in [200,201,202,204])
 
-  - name: Sucesso: mostrar resumo se registrado
-    debug:
-      msg: "Cliente {{ ansible_hostname }} registrado com sucesso na API (HTTP {{ register_response.status }})"
-    when: register_response is defined and register_response.status in [200,201,202,204]
+    - name: Sucesso: mostrar resumo se registrado
+      debug:
+        msg: "Cliente {{ ansible_hostname }} registrado com sucesso na API (HTTP {{ register_response.status }})"
+      when: register_response is defined and register_response.status in [200,201,202,204]
