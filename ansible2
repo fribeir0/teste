@@ -1,8 +1,7 @@
 ---
 - name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
   hosts: localhost
-  become: yes
-  remote_user: adminsenai@134
+  remote_user: root
 
   vars:
     register_api_host: "haproxy.upgrid.local"
