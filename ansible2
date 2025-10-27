@@ -1,6 +1,7 @@
 ---
 - name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
   hosts: localhost
+  become: yes
   remote_user: root
 
   vars:
@@ -11,23 +12,26 @@
 
   tasks:
 
-    - name: 1.1 - Atualizar o cache de pacotes
+  ########################################################
+  # 1. Atualizações e instalação básica                 #
+  ########################################################
+    - name: Atualizar cache de pacotes
       apt:
         update_cache: yes
-      tags: [update]
 
-    - name: 1.2 - Atualizar todos os pacotes do sistema
+    - name: Atualizar todos os pacotes do sistema
       apt:
         upgrade: dist
-      tags: [update]
 
-    - name: 2.1 - Instalar o Git
+    - name: Instalar Git
       apt:
         name: git
         state: present
-      tags: [git]
 
-    - name: 3.1 - Instalar pacotes de pré-requisito para o Docker
+  ########################################################
+  # 2. Instalação do Docker                              #
+  ########################################################
+    - name: Instalar pacotes de pré-requisito para Docker
       apt:
         name:
           - apt-transport-https
@@ -36,23 +40,20 @@
           - gnupg
           - lsb-release
         state: present
-      tags: [docker]
 
-    - name: 3.2 - Adicionar chave GPG oficial do Docker (convertida)
-      shell: |
-        curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-      args:
-        creates: /usr/share/keyrings/docker-archive-keyring.gpg
-      tags: [docker]
+    - name: Baixar e salvar a chave GPG oficial do Docker
+      get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /usr/share/keyrings/docker-archive-keyring.gpg
+        mode: '0644'
 
-    - name: 3.3 - Adicionar o repositório do Docker ao sistema
+    - name: Adicionar repositório Docker
       apt_repository:
         repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
         state: present
         filename: docker
-      tags: [docker]
 
-    - name: 3.4 - Instalar o Docker Engine, CLI e Compose
+    - name: Instalar Docker Engine, CLI e Compose
       apt:
         name:
           - docker-ce
@@ -61,32 +62,62 @@
           - docker-compose-plugin
         state: present
         update_cache: yes
-      tags: [docker]
 
-    - name: 3.5 - Garantir que o serviço do Docker esteja iniciado e habilitado
+    - name: Garantir que o Docker esteja iniciado e habilitado
       service:
         name: docker
         state: started
         enabled: yes
-      tags: [docker]
 
-    - name: 3.6 - Adicionar o usuário atual ao grupo docker
-      user:
-        name: "{{ ansible_user_id }}"
-        groups: docker
-        append: yes
-      tags: [docker]
-
-    - name: 4.1 - Obter IP local do cliente
+  ########################################################
+  # 3. Obter IP local do cliente                          #
+  ########################################################
+    - name: Obter IP local do cliente
       command: hostname -I
       register: client_ip_raw
       changed_when: false
 
-    - name: 4.2 - Definir IP processado
-      set_fact:
-        client_ip: "{{ client_ip_raw.stdout.split()[0] }}"
+    - set_fact:
+        client_ip: "{{ client_ip_raw.stdout.split()[0] | default('127.0.0.1') }}"
 
-    - name: 4.3 - Registrar cliente na API de register
+  ########################################################
+  # 4. Checagens de DNS e TCP                             #
+  ########################################################
+    - name: Checar resolução DNS para {{ register_api_host }}
+      command: getent hosts {{ register_api_host }}
+      register: getent_out
+      changed_when: false
+      failed_when: false
+
+    - name: Mostrar resultado da resolução DNS
+      debug:
+        msg:
+          - "getent stdout: {{ getent_out.stdout | default('') }}"
+          - "getent rc: {{ getent_out.rc }}"
+
+    - name: Verificar conectividade TCP na porta {{ register_api_port }}
+      wait_for:
+        host: "{{ register_api_host }}"
+        port: "{{ register_api_port }}"
+        timeout: 6
+        state: started
+      register: wait_for_result
+      failed_when: false
+
+    - name: Mostrar resultado do wait_for
+      debug:
+        msg: "wait_for result: {{ wait_for_result }}"
+
+  ########################################################
+  # 5. Registrar cliente na API                           #
+  ########################################################
+    - name: Registrar cliente na API (tentativas até sucesso)
+      vars:
+        payload:
+          name: "{{ ansible_hostname }}"
+          ip: "{{ client_ip }}"
+          port: 80
+          backend: "bk_web_apps"
       uri:
         url: "{{ register_api_url }}"
         method: POST
@@ -103,11 +134,28 @@
       retries: 4
       delay: 5
       ignore_errors: yes
-      tags: [register-api]
 
-    - name: 4.4 - Mostrar resultado do registro na API
+    - name: Mostrar resultado do registro na API
       debug:
-        msg: >-
-          Cliente {{ ansible_hostname }} registrado na API com IP {{ client_ip }}.
-          Resposta HTTP: {{ register_response.status | default('Falha na conexão com a API') }}
-      tags: [register-api]
+        msg:
+          - "URL: {{ register_api_url }}"
+          - "Payload: {{ payload }}"
+          - "HTTP status: {{ register_response.status | default('no-status') }}"
+          - "Content: {{ register_response.content | default('no-content') }}"
+          - "Failed: {{ register_response.failed | default(False) }}"
+          - "Msg (quando presente): {{ register_response.msg | default('') }}"
+
+    - name: Falhar explicitamente se o registro NÃO ocorreu
+      fail:
+        msg: |
+          Registro falhou.
+          URL={{ register_api_url }}
+          HTTP status={{ register_response.status | default('no-status') }}
+          Content={{ register_response.content | default('no-content') }}
+          Msg={{ register_response.msg | default('') }}
+      when: register_response is defined and (register_response.status is not defined or register_response.status not in [200,201,202,204])
+
+    - name: Sucesso: mostrar resumo se registrado
+      debug:
+        msg: "Cliente {{ ansible_hostname }} registrado com sucesso na API (HTTP {{ register_response.status }})"
+      when: register_response is defined and register_response.status in [200,201,202,204]
