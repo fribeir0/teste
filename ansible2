@@ -1,6 +1,6 @@
 ---
 - name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
-  hosts: cliente
+  hosts: localhost
   become: yes
   remote_user: adminsenai@134
 
