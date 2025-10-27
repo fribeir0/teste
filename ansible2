@@ -1,20 +1,14 @@
 ---
-- name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
+- name: Configurar Cliente Local (Docker + Registro na API)
   hosts: localhost
   become: yes
-  remote_user: root
+  gather_facts: yes
 
   vars:
-    register_api_host: "haproxy.upgrid.local"
-    register_api_port: 5000
-    register_api_path: "/register"
-    register_api_url: "http://{{ register_api_host }}:{{ register_api_port }}{{ register_api_path }}"
+    register_api_url: "http://haproxy.upgrid.local:5000/register"
 
   tasks:
 
-    ########################################################
-    # 1. Atualizações e instalação básica                 #
-    ########################################################
     - name: Atualizar cache de pacotes
       apt:
         update_cache: yes
@@ -28,10 +22,7 @@
         name: git
         state: present
 
-    ########################################################
-    # 2. Instalação do Docker                              #
-    ########################################################
-    - name: Instalar pacotes de pré-requisito para Docker
+    - name: Instalar pré-requisitos do Docker
       apt:
         name:
           - apt-transport-https
@@ -41,7 +32,7 @@
           - lsb-release
         state: present
 
-    - name: Baixar e salvar a chave GPG oficial do Docker
+    - name: Adicionar chave GPG do Docker
       get_url:
         url: https://download.docker.com/linux/debian/gpg
         dest: /usr/share/keyrings/docker-archive-keyring.gpg
@@ -53,7 +44,7 @@
         state: present
         filename: docker
 
-    - name: Instalar Docker Engine, CLI e Compose
+    - name: Instalar Docker
       apt:
         name:
           - docker-ce
@@ -63,99 +54,46 @@
         state: present
         update_cache: yes
 
-    - name: Garantir que o Docker esteja iniciado e habilitado
+    - name: Garantir que Docker esteja ativo
       service:
         name: docker
         state: started
         enabled: yes
 
-    ########################################################
-    # 3. Obter IP local do cliente                          #
-    ########################################################
-    - name: Obter IP local do cliente
+    - name: Obter IP local
       command: hostname -I
-      register: client_ip_raw
+      register: ip_raw
       changed_when: false
 
     - set_fact:
-        client_ip: "{{ client_ip_raw.stdout.split()[0] | default('127.0.0.1') }}"
+        client_ip: "{{ ip_raw.stdout.split()[0] | default('127.0.0.1') }}"
 
-    ########################################################
-    # 4. Checagens de DNS e TCP                             #
-    ########################################################
-    - name: Checar resolução DNS para {{ register_api_host }}
-      command: getent hosts {{ register_api_host }}
-      register: getent_out
-      changed_when: false
-      failed_when: false
-
-    - name: Mostrar resultado da resolução DNS
-      debug:
-        msg:
-          - "getent stdout: {{ getent_out.stdout | default('') }}"
-          - "getent rc: {{ getent_out.rc }}"
-
-    - name: Verificar conectividade TCP na porta {{ register_api_port }}
-      wait_for:
-        host: "{{ register_api_host }}"
-        port: "{{ register_api_port }}"
-        timeout: 6
-        state: started
-      register: wait_for_result
-      failed_when: false
-
-    - name: Mostrar resultado do wait_for
-      debug:
-        msg: "wait_for result: {{ wait_for_result }}"
-
-    ########################################################
-    # 5. Registrar cliente na API                           #
-    ########################################################
-    - name: Registrar cliente na API (tentativas até sucesso)
-      vars:
-        payload:
-          name: "{{ ansible_hostname }}"
-          ip: "{{ client_ip }}"
-          port: 80
-          backend: "bk_web_apps"
+    - name: Registrar cliente na API
       uri:
         url: "{{ register_api_url }}"
         method: POST
         headers:
           Content-Type: "application/json"
         body_format: json
-        body: "{{ payload }}"
-        timeout: 10
-        return_content: yes
+        body:
+          name: "{{ ansible_hostname }}"
+          ip: "{{ client_ip }}"
+          port: 80
+          backend: "bk_web_apps"
         status_code: 200,201,202,204
-        use_proxy: no
+        return_content: yes
       register: register_response
-      until: register_response.status is defined and register_response.status in [200,201,202,204]
       retries: 4
       delay: 5
-      ignore_errors: yes
+      until: register_response.status is defined and register_response.status in [200,201,202,204]
 
-    - name: Mostrar resultado do registro na API
+    - name: Mostrar resultado do registro
       debug:
         msg:
-          - "URL: {{ register_api_url }}"
-          - "Payload: {{ payload }}"
-          - "HTTP status: {{ register_response.status | default('no-status') }}"
-          - "Content: {{ register_response.content | default('no-content') }}"
-          - "Failed: {{ register_response.failed | default(False) }}"
-          - "Msg (quando presente): {{ register_response.msg | default('') }}"
+          - "Status HTTP: {{ register_response.status | default('no-status') }}"
+          - "Conteúdo: {{ register_response.content | default('no-content') }}"
 
-    - name: Falhar explicitamente se o registro NÃO ocorreu
+    - name: Falhar se registro não ocorreu
       fail:
-        msg: |
-          Registro falhou.
-          URL={{ register_api_url }}
-          HTTP status={{ register_response.status | default('no-status') }}
-          Content={{ register_response.content | default('no-content') }}
-          Msg={{ register_response.msg | default('') }}
-      when: register_response is defined and (register_response.status is not defined or register_response.status not in [200,201,202,204])
-
-    - name: Sucesso: mostrar resumo se registrado
-      debug:
-        msg: "Cliente {{ ansible_hostname }} registrado com sucesso na API (HTTP {{ register_response.status }})"
-      when: register_response is defined and register_response.status in [200,201,202,204]
+        msg: "Registro falhou: HTTP={{ register_response.status | default('no-status')}}"
+      when: register_response.status not in [200,201,202,204]
