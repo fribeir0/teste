@@ -1,11 +1,13 @@
 ---
 - name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
   hosts: localhost
-  become: yes
-  connection: local  # executa tudo localmente
+  remote_user: root
 
   vars:
-    register_api_url: "http://haproxy.upgrid.local:5000/register"
+    register_api_host: "haproxy.upgrid.local"
+    register_api_port: 5000
+    register_api_path: "/register"
+    register_api_url: "http://{{ register_api_host }}:{{ register_api_port }}{{ register_api_path }}"
 
   tasks:
 
@@ -91,12 +93,15 @@
         headers:
           Content-Type: "application/json"
         body_format: json
-        body:
-          name: "{{ ansible_hostname }}"
-          ip: "{{ client_ip }}"
-          port: 80
-          backend: "bk_web_apps"
+        body: "{{ payload }}"
+        timeout: 10
+        return_content: yes
+        status_code: 200,201,202,204
+        use_proxy: no
       register: register_response
+      until: register_response.status is defined and register_response.status in [200,201,202,204]
+      retries: 4
+      delay: 5
       ignore_errors: yes
       tags: [register-api]
 
