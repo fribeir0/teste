@@ -1,11 +1,14 @@
 ---
 - name: Configurar Servidor Cliente (Update, Docker, Git e Registro na API) - Debian 13
-  hosts: cliente
+  hosts: localhost
   become: yes
   remote_user: adminsenai@134
 
   vars:
-    register_api_url: "http://haproxy.upgrid.local:5000/register"
+    register_api_host: "haproxy.upgrid.local"
+    register_api_port: 5000
+    register_api_path: "/register"
+    register_api_url: "http://{{ register_api_host }}:{{ register_api_port }}{{ register_api_path }}"
 
   tasks:
 
@@ -81,25 +84,108 @@
       changed_when: false
 
     - set_fact:
-        client_ip: "{{ client_ip_raw.stdout.split()[0] }}"
+        client_ip: "{{ client_ip_raw.stdout.split()[0] | default('127.0.0.1') }}"
 
-    - name: 4.2 - Registrar cliente na API de register
+    ########################################################
+    # Checagens prévias de resolução e porta TCP           #
+    ########################################################
+    - name: 4.1.2 - Checar resolução DNS para {{ register_api_host }}
+      command: getent hosts {{ register_api_host }}
+      register: getent_out
+      changed_when: false
+      failed_when: false
+      tags: [register-api, debug]
+
+    - name: 4.1.3 - Mostrar resultado da resolução DNS
+      debug:
+        msg:
+          - "getent stdout: {{ getent_out.stdout | default('') }}"
+          - "getent rc: {{ getent_out.rc }}"
+      tags: [register-api, debug]
+
+    - name: 4.1.4 - Verificar conectividade TCP na porta {{ register_api_port }}
+      wait_for:
+        host: "{{ register_api_host }}"
+        port: "{{ register_api_port }}"
+        timeout: 6
+        state: started
+      register: wait_for_result
+      failed_when: false
+      tags: [register-api, debug]
+
+    - name: 4.1.5 - Mostrar resultado do wait_for
+      debug:
+        msg:
+          - "wait_for result: {{ wait_for_result }}"
+      tags: [register-api, debug]
+
+    ########################################################
+    # Registro na API - com retries e debug detalhado      #
+    ########################################################
+    - name: 4.2 - Registrar cliente na API de register (tentativas até sucesso)
+      vars:
+        payload:
+          name: "{{ ansible_hostname }}"
+          ip: "{{ client_ip }}"
+          port: 80
+          backend: "bk_web_apps"
       uri:
         url: "{{ register_api_url }}"
         method: POST
         headers:
           Content-Type: "application/json"
         body_format: json
-        body:
-          name: "{{ ansible_hostname }}"
-          ip: "{{ client_ip }}"
-          port: 80
-          backend: "bk_web_apps"
+        body: "{{ payload }}"
+        timeout: 10
+        return_content: yes
+        status_code: 200,201,202,204
+        use_proxy: no
       register: register_response
+      until: register_response.status is defined and register_response.status in [200,201,202,204]
+      retries: 4
+      delay: 5
       ignore_errors: yes
       tags: [register-api]
 
-    - name: 4.3 - Mostrar resultado do registro na API
+    - name: 4.3 - Mostrar resultado do registro na API (detalhado)
       debug:
-        msg: "Cliente {{ ansible_hostname }} registrado na API com IP {{ client_ip }}. Resposta HTTP: {{ register_response.status }}"
+        msg:
+          - "URL: {{ register_api_url }}"
+          - "Payload: {{ {'name': ansible_hostname, 'ip': client_ip, 'port': 80, 'backend': 'bk_web_apps'} }}"
+          - "HTTP status: {{ register_response.status | default('no-status') }}"
+          - "Content: {{ register_response.content | default('no-content') }}"
+          - "Failed: {{ register_response.failed | default(False) }}"
+          - "Msg (quando presente): {{ register_response.msg | default('') }}"
+      tags: [register-api, debug]
+
+    - name: 4.4 - Se houve falha, coletar diagnóstico com curl (do host cliente)
+      command: >
+        curl -sS -D - -o /tmp/register_curl_out.txt -X POST
+        -H "Content-Type: application/json"
+        -d '{{ {"name": ansible_hostname, "ip": client_ip, "port": 80, "backend":"bk_web_apps"} | to_json }}'
+        {{ register_api_url }}
+      register: curl_diag
+      failed_when: false
+      when: register_response is defined and (register_response.status is not defined or register_response.status not in [200,201,202,204])
+      tags: [register-api, debug]
+
+    - name: 4.5 - Mostrar saída do curl de diagnóstico (se executado)
+      command: cat /tmp/register_curl_out.txt
+      register: curl_out_file
+      changed_when: false
+      failed_when: false
+      when: curl_diag is defined and curl_diag.rc == 0
+      tags: [register-api, debug]
+
+    - name: 4.6 - Mostrar resultado final resumido e falha explícita se necessário
+      block:
+        - debug:
+            msg: "Cliente {{ ansible_hostname }} registrado com sucesso na API (HTTP {{ register_response.status }})"
+        - meta: noop
+      rescue:
+        - debug:
+            msg:
+              - "Registro falhou. Veja os passos de diagnóstico anteriores (getent, wait_for, curl)."
+              - "Se getent não resolver, corrija DNS no seu ambiente (servidor DHCP/DNS, etc)."
+              - "Se wait_for informou que a porta não está aberta, verifique o serviço da API no host {{ register_api_host }} e firewall."
       tags: [register-api]
